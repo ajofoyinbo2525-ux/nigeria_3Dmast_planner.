@@ -3,10 +3,15 @@ import pandas as pd
 import plotly.express as px
 import os
 
-# 1. Dashboard Configuration
-st.set_page_config(page_title="Nigeria Telecom GIS", page_icon="📡", layout="wide")
+# --- 1. PAGE CONFIGURATION ---
+st.set_page_config(
+    page_title="Nigeria Telecom GIS Infrastructure",
+    page_icon="📡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# 2. Network Mapping for Nigeria (MCC 621)
+# --- 2. OPERATOR MAPPING (MCC 621) ---
 MNC_MAP = {
     30: "MTN Nigeria",
     60: "Airtel Nigeria",
@@ -19,76 +24,127 @@ MNC_MAP = {
     0: "Other/Fixed"
 }
 
-# 3. High-Performance Data Loading
-@st.cache_data(ttl=3600) # Cache for 1 hour to speed up the site
+# --- 3. ROBUST DATA LOADING ---
+@st.cache_data(show_spinner="Analyzing Infrastructure Database...")
 def load_data():
-    file_name = '621_GIS_ready_2G_3G_4G.csv'
-    if not os.path.exists(file_name):
+    file_path = '621_GIS_ready_2G_3G_4G.csv'
+    
+    # Try multiple encodings to handle special characters or Excel-saved CSVs
+    encodings = ['utf-8', 'latin1', 'cp1252']
+    
+    if not os.path.exists(file_path):
         return None
-    
-    # Reading the specific columns we need to save memory
-    df = pd.read_csv(file_name)
-    
-    # Mapping columns from your specific CSV structure
-    df = df.rename(columns={
-        '60': 'MNC',
-        '50822': 'Cell_ID',
-        'Latitude_abs': 'Latitude',
-        'Longitude_abs': 'Longitude',
-        'Network_Generation': 'Generation'
-    })
-    
-    # Create Operator names
-    df['Operator'] = df['MNC'].map(MNC_MAP).fillna("Unknown")
-    return df
 
-# 4. Main Application Logic
+    for enc in encodings:
+        try:
+            # Loading data with current encoding
+            df = pd.read_csv(file_path, encoding=enc)
+            
+            # Rename columns based on the specific dataset structure
+            df = df.rename(columns={
+                '60': 'MNC',
+                '50822': 'Cell_ID',
+                'Latitude_abs': 'Latitude',
+                'Longitude_abs': 'Longitude',
+                'Network_Generation': 'Gen'
+            })
+            
+            # Map MNC codes to names and drop invalid coordinates
+            df['Operator'] = df['MNC'].map(MNC_MAP).fillna("Other Operator")
+            df = df.dropna(subset=['Latitude', 'Longitude'])
+            
+            return df
+        except Exception:
+            continue
+            
+    return None
+
+# --- 4. MAIN APPLICATION LOGIC ---
 def main():
+    # Load the data
     df = load_data()
     
     if df is None:
-        st.error("⚠️ Data file not found. Ensure '621_GIS_ready_2G_3G_4G.csv' is in your GitHub folder.")
+        st.error("### ❌ Data Loading Error")
+        st.write("Could not decode the CSV file or file is missing. Ensure `621_GIS_ready_2G_3G_4G.csv` is in the repository.")
         st.stop()
 
-    st.title("📡 Nigeria Infrastructure GIS Dashboard")
+    # --- SIDEBAR FILTERS ---
+    st.sidebar.image("https://img.icons8.com/fluency/96/antenna.png", width=80)
+    st.sidebar.title("Filter Control")
+    
+    operators = sorted(df['Operator'].unique())
+    selected_ops = st.sidebar.multiselect("Network Operators", operators, default=operators)
+    
+    generations = sorted(df['Gen'].unique())
+    selected_gens = st.sidebar.multiselect("Technology Generation", generations, default=generations)
 
-    # Sidebar Filters
-    st.sidebar.subheader("Filter Settings")
-    selected_ops = st.sidebar.multiselect("Operators", df['Operator'].unique(), default=df['Operator'].unique())
-    selected_gens = st.sidebar.multiselect("Technology", df['Generation'].unique(), default=df['Generation'].unique())
+    # Filtering dataframe
+    f_df = df[(df['Operator'].isin(selected_ops)) & (df['Gen'].isin(selected_gens))]
 
-    # Apply Filters
-    f_df = df[(df['Operator'].isin(selected_ops)) & (df['Generation'].isin(selected_gens))]
+    # --- DASHBOARD HEADER & METRICS ---
+    st.title("📡 Nigeria Network Infrastructure GIS")
+    st.markdown(f"Currently visualizing site data for **{len(f_df):,}** active cell sites.")
 
-    # Metrics
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total Sites", f"{len(f_df):,}")
-    m2.metric("4G Sites", f"{len(f_df[f_df['Generation'] == '4G']):,}")
-    m3.metric("3G Sites", f"{len(f_df[f_df['Generation'] == '3G']):,}")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Cells", f"{len(f_df):,}")
+    m2.metric("4G Sites", f"{len(f_df[f_df['Gen'] == '4G']):,}")
+    m3.metric("3G Sites", f"{len(f_df[f_df['Gen'] == '3G']):,}")
+    m4.metric("Active Operators", f_df['Operator'].nunique())
 
-    # Visualization Tabs
-    tab1, tab2 = st.tabs(["🌍 GIS Map", "📊 Analytics"])
+    # --- VISUALIZATION TABS ---
+    tab_map, tab_stats, tab_data = st.tabs(["🌍 GIS Map", "📊 Market Analytics", "📂 Data Explorer"])
 
-    with tab1:
-        # Sampling 20,000 points to ensure the map is fast in the web browser
-        plot_df = f_df.sample(min(len(f_df), 20000), random_state=42) if len(f_df) > 20000 else f_df
+    with tab_map:
+        st.subheader("Geographical Distribution")
         
-        fig = px.scatter_mapbox(
-            plot_df, lat="Latitude", lon="Longitude", color="Operator",
-            hover_name="Cell_ID", zoom=5, height=650,
-            title="Geographical Distribution (Sampled for Performance)"
+        # Optimization: Plotting > 100k points crashes browsers. 
+        # We sample up to 25k for the best visual vs performance balance.
+        if len(f_df) > 25000:
+            st.info("💡 Large dataset detected. Showing a representative sample of 25,000 sites.")
+            map_data = f_df.sample(25000, random_state=42)
+        else:
+            map_data = f_df
+        
+        fig_map = px.scatter_mapbox(
+            map_data, 
+            lat="Latitude", 
+            lon="Longitude", 
+            color="Operator",
+            hover_name="Cell_ID",
+            hover_data=["Operator", "Gen"],
+            zoom=5, 
+            height=650,
+            color_discrete_sequence=px.colors.qualitative.Prism
         )
-        fig.update_layout(mapbox_style="open-street-map", margin={"r":0,"t":40,"l":0,"b":0})
-        st.plotly_chart(fig, use_container_width=True)
+        fig_map.update_layout(mapbox_style="open-street-map", margin={"r":0,"t":0,"l":0,"b":0})
+        st.plotly_chart(fig_map, use_container_width=True)
 
-    with tab2:
+    with tab_stats:
         c1, c2 = st.columns(2)
-        c1.plotly_chart(px.bar(f_df['Operator'].value_counts(), title="Site Count by Operator"), use_container_width=True)
-        c2.plotly_chart(px.pie(f_df, names='Generation', title="Technology Share"), use_container_width=True)
+        with c1:
+            st.subheader("Sites per Operator")
+            fig_op = px.bar(f_df['Operator'].value_counts(), color_discrete_sequence=['#2E86C1'])
+            st.plotly_chart(fig_op, use_container_width=True)
+        with c2:
+            st.subheader("Technology Mix")
+            fig_pie = px.pie(f_df, names='Gen', hole=0.4)
+            st.plotly_chart(fig_pie, use_container_width=True)
 
-    # Export Feature
-    st.sidebar.divider()
-    st.sidebar.download_button("📥 Export Filtered Data", f_df.to_csv(index=False), "telecom_data.csv")
+    with tab_data:
+        st.subheader("Database Preview")
+        st.dataframe(f_df.head(1000), use_container_width=True)
+        
+        csv_data = f_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Filtered Dataset (CSV)",
+            data=csv_data,
+            file_name="nigeria_telecom_export.csv",
+            mime="text/csv"
+        )
+
+    st.divider()
+    st.caption("Deployment: GitHub / Streamlit Community Cloud | Nigeria GIS Ready Dataset")
 
 if __name__ == "__main__":
     main()
