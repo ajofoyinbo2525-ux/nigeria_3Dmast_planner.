@@ -5,7 +5,7 @@ st.set_page_config(page_title="Nigeria Mast Planner")
 
 st.title("Nigeria Mast Planner")
 
-df = pd.read_csv("sandbox__mnt_data_mast_data_final.csv - Google Search")
+df = pd.read_csv("sandbox__mnt_data_mast_data_final.csv")
 
 st.write("Preview of data:")
 st.dataframe(df.head())
